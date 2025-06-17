@@ -1,0 +1,70 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest ]
+        build_type: [ Release ]
+        compiler: [ gcc, clang ]
+        include:
+          - compiler: gcc
+            c_compiler: gcc-13
+            cpp_compiler: g++-13
+          - compiler: clang
+            c_compiler: clang-19
+            cpp_compiler: clang++-19
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # the project is depended on GoogleTest & GoogleBenchmark
+      - name: Resolve Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt update
+          sudo apt install -y libgtest-dev ninja-build
+          # Add LLVM repo and install clang-19 and clang-tools-19 if using clang
+          if [[ "${{ matrix.compiler }}" == "clang" ]]; then
+            wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+            echo "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-19 main" | sudo tee /etc/apt/sources.list.d/llvm-19.list
+            sudo apt update
+            sudo apt install -y clang-19 clang-tools-19
+          else
+            sudo apt install -y ${{ matrix.c_compiler }}
+          fi
+
+      - name: Configure
+        run: |
+          cmake -E make_directory ${{ github.workspace }}/build
+          cmake -B ${{ github.workspace }}/build                    \
+                -G Ninja                                           \
+                -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}         \
+                -DCMAKE_COLOR_DIAGNOSTICS=ON                        \
+                -DCMAKE_CXX_FLAGS="-fdiagnostics-color=always"      \
+                -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}     \
+                -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}         \
+                -DBLM_BUILD_EXAMPLES=OFF                            \
+                -DBLM_BUILD_TESTS=ON                                \
+                -DBLM_BUILD_BENCHMARKS=OFF                          \
+                -DBLM_BUILD_SHARED_LIBS=OFF                         \
+                -DBLM_ENABLE_ASAN=OFF                               \
+                -DBLM_ENABLE_LSAN=OFF                               \
+                -DBLM_ENABLE_UBSAN=ON                               \
+                -S ${{ github.workspace }}
+
+      - name: Build
+        working-directory: ${{github.workspace}}/build
+        run: cmake --build . --config ${{ matrix.build_type }}
+
+      - name: Run Tests
+        working-directory: ${{ github.workspace }}/build
+        run: ctest --output-on-failure
